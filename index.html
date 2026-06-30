@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PNG to EPS Converter — Adobe Stock Ready</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f0f13;
+      --surface: #18181f;
+      --card: #1e1e28;
+      --border: #2a2a38;
+      --accent: #7c5cfc;
+      --accent2: #c084fc;
+      --accent-glow: rgba(124, 92, 252, 0.25);
+      --text: #f0f0f5;
+      --muted: #8888a0;
+      --success: #34d399;
+      --warning: #fbbf24;
+      --error: #f87171;
+      --radius: 12px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* HEADER */
+    header {
+      padding: 28px 40px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      background: var(--surface);
+    }
+    .logo {
+      width: 40px; height: 40px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+    }
+    .brand h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.3px; }
+    .brand p { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+    .badge {
+      margin-left: auto;
+      background: rgba(124,92,252,0.15);
+      border: 1px solid var(--accent);
+      color: var(--accent2);
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 99px;
+      letter-spacing: 0.5px;
+    }
+
+    /* MAIN */
+    main {
+      flex: 1;
+      padding: 40px;
+      max-width: 900px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    /* DROP ZONE */
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 56px 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: var(--card);
+      position: relative;
+    }
+    .dropzone:hover, .dropzone.drag-over {
+      border-color: var(--accent);
+      background: rgba(124,92,252,0.06);
+      box-shadow: 0 0 0 4px var(--accent-glow);
+    }
+    .dropzone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .drop-icon { font-size: 48px; margin-bottom: 16px; display: block; }
+    .dropzone h2 { font-size: 1.15rem; font-weight: 600; margin-bottom: 8px; }
+    .dropzone p { color: var(--muted); font-size: 0.88rem; }
+    .dropzone .hint {
+      margin-top: 16px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(124,92,252,0.1);
+      border: 1px solid rgba(124,92,252,0.3);
+      color: var(--accent2);
+      font-size: 0.78rem;
+      padding: 6px 14px;
+      border-radius: 99px;
+    }
+
+    /* FILE LIST */
+    #fileSection { display: none; margin-top: 32px; }
+    .section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .section-header h3 { font-size: 0.95rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
+    .count-badge {
+      background: var(--accent);
+      color: #fff;
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 2px 10px;
+      border-radius: 99px;
+    }
+    .btn-clear {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.8rem;
+      padding: 5px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-clear:hover { border-color: var(--error); color: var(--error); }
+    .btn-clear:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-clear:disabled:hover { border-color: var(--border); color: var(--muted); }
+
+    .file-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 12px;
+      max-height: 340px;
+      overflow-y: auto;
+      padding: 4px;
+    }
+    .file-grid::-webkit-scrollbar { width: 6px; }
+    .file-grid::-webkit-scrollbar-track { background: transparent; }
+    .file-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    .file-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      position: relative;
+      transition: transform 0.15s;
+    }
+    .file-card:hover { transform: translateY(-2px); }
+    .file-card img {
+      width: 100%; height: 90px;
+      object-fit: cover;
+      display: block;
+      background: #111;
+    }
+    .file-card .fname {
+      padding: 6px 8px;
+      font-size: 0.72rem;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .file-card .status-dot {
+      position: absolute; top: 6px; right: 6px;
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--border);
+      border: 2px solid var(--bg);
+    }
+    .file-card.done .status-dot { background: var(--success); }
+    .file-card.error .status-dot { background: var(--error); }
+    .file-card.converting .status-dot {
+      background: var(--warning);
+      animation: pulse 0.8s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* SETTINGS */
+    #settingsSection { display: none; margin-top: 24px; }
+    .settings-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+    }
+    .settings-card h3 { font-size: 0.85rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 16px; }
+    .settings-row {
+      display: flex; gap: 20px; flex-wrap: wrap;
+    }
+    .setting-item { flex: 1; min-width: 180px; }
+    .setting-item label { font-size: 0.82rem; color: var(--muted); display: block; margin-bottom: 6px; }
+    .setting-item select, .setting-item input[type="number"] {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .setting-item select:focus, .setting-item input[type="number"]:focus {
+      border-color: var(--accent);
+    }
+
+    /* CONVERT BUTTON */
+    #convertSection { display: none; margin-top: 28px; }
+    .btn-convert {
+      width: 100%;
+      padding: 16px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border: none;
+      border-radius: var(--radius);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      transition: opacity 0.2s, transform 0.1s;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+    }
+    .btn-convert:hover { opacity: 0.9; }
+    .btn-convert:active { transform: scale(0.99); }
+    .btn-convert:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* PROGRESS */
+    #progressSection { display: none; margin-top: 24px; }
+    .progress-track {
+      background: var(--border);
+      border-radius: 99px;
+      height: 8px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 99px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+    .progress-label {
+      font-size: 0.82rem;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    /* DOWNLOAD */
+    #downloadSection { display: none; margin-top: 20px; }
+    .result-card {
+      background: rgba(52,211,153,0.08);
+      border: 1px solid rgba(52,211,153,0.3);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      display: flex; align-items: center; gap: 20px;
+    }
+    .result-icon { font-size: 36px; }
+    .result-info { flex: 1; }
+    .result-info h3 { font-weight: 600; margin-bottom: 4px; }
+    .result-info p { font-size: 0.84rem; color: var(--muted); }
+    .btn-download {
+      padding: 12px 28px;
+      background: var(--success);
+      border: none;
+      border-radius: 10px;
+      color: #0a1a10;
+      font-size: 0.92rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      white-space: nowrap;
+    }
+    .btn-download:hover { opacity: 0.85; }
+
+    /* FOOTER */
+    footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--accent2); text-decoration: none; }
+
+    @media (max-width: 600px) {
+      main { padding: 20px 16px; }
+      header { padding: 16px 20px; }
+      .dropzone { padding: 40px 20px; }
+      .settings-row { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">⚡</div>
+  <div class="brand">
+    <h1>PNG → EPS Converter</h1>
+    <p>Bulk converter for Adobe Stock contributors</p>
+  </div>
+  <span class="badge">ADOBE STOCK READY</span>
+</header>
+
+<main>
+  <!-- DROP ZONE -->
+  <div class="dropzone" id="dropzone">
+    <input type="file" id="fileInput" accept="image/png" multiple />
+    <span class="drop-icon">🖼️</span>
+    <h2>Drop PNG files di sini</h2>
+    <p>atau klik untuk pilih file — support upload massal</p>
+    <span class="hint">✦ Format output: EPS (Adobe Stock compatible)</span>
+  </div>
+
+  <!-- FILE LIST -->
+  <div id="fileSection">
+    <div class="section-header">
+      <h3>File dipilih <span class="count-badge" id="fileCount">0</span></h3>
+      <button type="button" class="btn-clear" id="clearBtn" onclick="clearFiles()">✕ Hapus Semua</button>
+    </div>
+    <div class="file-grid" id="fileGrid"></div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="settingsSection">
+    <div class="settings-card">
+      <h3>⚙️ Pengaturan Vector Tracing</h3>
+      <div class="settings-row">
+        <div class="setting-item">
+          <label>Threshold (sensitivitas bentuk)</label>
+          <select id="threshold">
+            <option value="100">Rendah — 100 (objek terang ikut ter-trace)</option>
+            <option value="128" selected>Normal — 128 (rekomendasi)</option>
+            <option value="180">Tinggi — 180 (hanya bentuk paling gelap/tegas)</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label>Simplifikasi (kerapatan titik)</label>
+          <select id="simplifyTol">
+            <option value="0.5">Detail tinggi — 0.5 (titik banyak, presisi)</option>
+            <option value="1.5" selected>Normal — 1.5 (rekomendasi)</option>
+            <option value="3">Halus — 3 (titik sedikit, path bersih)</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label>EPS Version</label>
+          <select id="epsVersion">
+            <option value="3.0" selected>EPS 3.0 (recommended)</option>
+            <option value="2.0">EPS 2.0 (legacy)</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label>DPI Referensi</label>
+          <select id="dpiMode">
+            <option value="72">72 DPI</option>
+            <option value="150">150 DPI</option>
+            <option value="300" selected>300 DPI (Adobe Stock)</option>
+          </select>
+        </div>
+      </div>
+      <p style="margin-top:14px; font-size:0.8rem; color:var(--muted); line-height:1.5;">
+        💡 Untuk icon/objek tanpa background: pakai setting <strong>Normal</strong> di semua pilihan dulu,
+        lalu cek hasil di Preview sebelum upload massal. Naikkan Threshold kalau ada bagian terang yang
+        ikut ter-trace tidak diinginkan; naikkan Simplifikasi kalau hasil path terlalu "berduri"/noisy.
+      </p>
+    </div>
+  </div>
+
+  <!-- PREVIEW BUTTON -->
+  <div id="previewSection" style="display:none; margin-top:16px;">
+    <button type="button" class="btn-clear" id="previewBtn" style="width:100%; padding:12px; font-size:0.88rem;" onclick="previewFirst()">
+      👁 Preview Hasil Trace (file pertama) — cek sebelum proses semua
+    </button>
+    <div id="previewBox" style="display:none; margin-top:16px; background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; text-align:center;">
+      <div id="previewSvgWrap" style="background:#fff; border-radius:8px; padding:16px; display:inline-block; max-width:100%;"></div>
+      <p id="previewInfo" style="margin-top:10px; font-size:0.8rem; color:var(--muted);"></p>
+    </div>
+  </div>
+
+  <!-- WARNING BOX -->
+  <div id="warningBox" style="display:none; margin-top:16px; background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.4); border-radius:12px; padding:16px 20px; font-size:0.85rem; color:#fde68a;"></div>
+
+  <!-- CONVERT BUTTON -->
+  <div id="convertSection">
+    <button type="button" class="btn-convert" id="convertBtn" onclick="startConvert()">
+      ⚡ Konversi Semua ke EPS &amp; Download ZIP
+    </button>
+  </div>
+
+  <!-- PROGRESS -->
+  <div id="progressSection">
+    <div class="progress-track">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+    <p class="progress-label" id="progressLabel">Memproses...</p>
+  </div>
+
+  <!-- DOWNLOAD -->
+  <div id="downloadSection">
+    <div class="result-card">
+      <span class="result-icon">✅</span>
+      <div class="result-info">
+        <h3>Konversi selesai!</h3>
+        <p id="resultDesc">File EPS siap didownload</p>
+      </div>
+      <button type="button" class="btn-download" id="downloadBtn">⬇ Download ZIP</button>
+    </div>
+  </div>
+</main>
+
+<footer>
+  PNG to EPS Bulk Converter &mdash; Adobe Stock Ready &mdash;
+  Dibuat untuk <a href="#">Adobe Stock Contributors</a>
+</footer>
+
+<script>
+  // ─── STATE ───────────────────────────────────────────────
+  let files = [];
+  let zipBlob = null;
+  let zipDownloadUrl = null; // tracks the active blob URL for the zip so we can revoke it before creating a new one
+  let isProcessing = false; // true while previewFirst() or startConvert() is running —
+                             // blocks adding/clearing files mid-flight to prevent
+                             // index/array mismatches and null-element crashes.
+
+  // ─── DRAG & DROP ─────────────────────────────────────────
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+  dropzone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropzone.classList.remove('drag-over');
+    if (isProcessing) return; // ignore new files while converting/previewing
+    const dropped = Array.from(e.dataTransfer.files).filter(f => f.type === 'image/png');
+    addFiles(dropped);
+  });
+  fileInput.addEventListener('change', () => {
+    if (isProcessing) { fileInput.value = ''; return; }
+    addFiles(Array.from(fileInput.files));
+    fileInput.value = '';
+  });
+
+  function addFiles(newFiles) {
+    newFiles.forEach(f => {
+      if (!files.find(x => x.name === f.name && x.size === f.size)) files.push(f);
+    });
+    renderFileGrid();
+    show('fileSection');
+    show('settingsSection');
+    show('convertSection');
+    show('previewSection');
+    hide('previewBox');
+    hide('downloadSection');
+    hide('progressSection');
+    hide('warningBox');
+    zipBlob = null;
+    if (zipDownloadUrl) { URL.revokeObjectURL(zipDownloadUrl); zipDownloadUrl = null; }
+    document.getElementById('fileCount').textContent = files.length;
+  }
+
+  function clearFiles() {
+    if (isProcessing) return; // never clear array mid-conversion/preview
+    files = [];
+    zipBlob = null;
+    if (zipDownloadUrl) { URL.revokeObjectURL(zipDownloadUrl); zipDownloadUrl = null; }
+    document.getElementById('fileGrid').innerHTML = '';
+    hide('fileSection');
+    hide('settingsSection');
+    hide('convertSection');
+    hide('progressSection');
+    hide('downloadSection');
+    hide('previewSection');
+    hide('previewBox');
+    hide('warningBox');
+  }
+
+  function renderFileGrid() {
+    const grid = document.getElementById('fileGrid');
+    grid.innerHTML = '';
+    files.forEach((f, i) => {
+      const card = document.createElement('div');
+      card.className = 'file-card';
+      card.id = `card-${i}`;
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(f);
+      img.onload = () => URL.revokeObjectURL(img.src);
+      const fname = document.createElement('div');
+      fname.className = 'fname';
+      fname.title = f.name;
+      fname.textContent = f.name.replace('.png','');
+      const dot = document.createElement('div');
+      dot.className = 'status-dot';
+      card.append(img, fname, dot);
+      grid.appendChild(card);
+    });
+  }
+
+  // ─── WEB WORKER (vector tracing di background thread) ──────
+  // PNG -> deteksi kontur bentuk (marching squares) -> simplifikasi
+  // titik (Douglas-Peucker) -> path PostScript asli (moveto/lineto/
+  // curveto). Hasilnya VECTOR PATH SUNGGUHAN, bukan bitmap dibungkus.
+  const workerCode = `
+    // 1) Threshold: ubah pixel jadi hitam(1)/putih(0) berdasar alpha+luminance
+    function toBinary(pixels, w, h, threshold){
+      const bin = new Uint8Array(w*h);
+      for(let i=0;i<w*h;i++){
+        const a = pixels[i*4+3];
+        if(a < 16){ bin[i]=0; continue; } // transparan = background
+        const r=pixels[i*4], g=pixels[i*4+1], b=pixels[i*4+2];
+        const lum = 0.299*r+0.587*g+0.114*b;
+        bin[i] = lum < threshold ? 1 : 0; // gelap = isi objek
+      }
+      return bin;
+    }
+
+    // 2) Trace kontur tiap region terpisah pakai algoritma boundary-following
+    //    (Moore-Neighbor tracing) - menghasilkan urutan titik tepi (px,py)
+    function traceContours(bin, w, h){
+      const visited = new Uint8Array(w*h);
+      const contours = [];
+      const dirs = [[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1]];
+
+      function isFg(x,y){
+        if(x<0||y<0||x>=w||y>=h) return false;
+        return bin[y*w+x]===1;
+      }
+
+      for(let y=0;y<h;y++){
+        for(let x=0;x<w;x++){
+          const idx=y*w+x;
+          if(bin[idx]!==1 || visited[idx]) continue;
+          // cek apakah ini titik tepi kiri-atas dari region baru (boundary pixel)
+          if(isFg(x-1,y)) continue; // bukan tepi kiri
+
+          const contour=[];
+          let cx=x, cy=y, startDir=0;
+          const startX=x, startY=y;
+          let steps=0;
+          const maxSteps = w*h*2;
+
+          do {
+            contour.push([cx,cy]);
+            visited[cy*w+cx]=1;
+            let found=false;
+            for(let k=0;k<8;k++){
+              const d=(startDir+k)%8;
+              const nx=cx+dirs[d][0], ny=cy+dirs[d][1];
+              if(isFg(nx,ny)){
+                cx=nx; cy=ny;
+                startDir=(d+6)%8;
+                found=true;
+                break;
+              }
+            }
+            if(!found) break;
+            steps++;
+          } while(!(cx===startX && cy===startY) && steps<maxSteps);
+
+          if(contour.length>6) contours.push(contour);
+        }
+      }
+      return contours;
+    }
+
+    // 3) Douglas-Peucker: sederhanakan titik kontur jadi lebih sedikit
+    //    titik kunci (anchor points), supaya hasil path bersih & editable
+    function perpDist(pt, a, b){
+      const dx=b[0]-a[0], dy=b[1]-a[1];
+      const len=Math.sqrt(dx*dx+dy*dy);
+      if(len===0) return Math.hypot(pt[0]-a[0], pt[1]-a[1]);
+      const t=((pt[0]-a[0])*dx+(pt[1]-a[1])*dy)/(len*len);
+      const px=a[0]+t*dx, py=a[1]+t*dy;
+      return Math.hypot(pt[0]-px, pt[1]-py);
+    }
+    function simplify(points, epsilon){
+      if(points.length<3) return points;
+      let maxDist=0, idx=0;
+      for(let i=1;i<points.length-1;i++){
+        const d=perpDist(points[i], points[0], points[points.length-1]);
+        if(d>maxDist){ maxDist=d; idx=i; }
+      }
+      if(maxDist>epsilon){
+        const left=simplify(points.slice(0,idx+1), epsilon);
+        const right=simplify(points.slice(idx), epsilon);
+        return left.slice(0,-1).concat(right);
+      }
+      return [points[0], points[points.length-1]];
+    }
+
+    // 4) Bangun path PostScript dari titik-titik kontur (sudah disederhanakan)
+    function contourToPath(points, scale, h){
+      if(points.length<2) return '';
+      let path = points[0][0]*scale+' '+(h-points[0][1])*scale+' moveto\\n';
+      for(let i=1;i<points.length;i++){
+        path += (points[i][0]*scale).toFixed(2)+' '+((h-points[i][1])*scale).toFixed(2)+' lineto\\n';
+      }
+      path += 'closepath\\n';
+      return path;
+    }
+
+    function buildVectorEps(w, h, pixels, dpi, epsVer, threshold, simplifyTol){
+      const scale = 72/dpi;
+      const ptW = (w*scale).toFixed(4), ptH = (h*scale).toFixed(4);
+
+      const bin = toBinary(pixels, w, h, threshold);
+      const rawContours = traceContours(bin, w, h);
+
+      let pathBody = '';
+      let pathCount = 0;
+      for(const c of rawContours){
+        const simplified = simplify(c, simplifyTol);
+        if(simplified.length<3) continue;
+        pathBody += contourToPath(simplified, scale, h);
+        pathCount++;
+      }
+
+      const header = [
+        '%!PS-Adobe-'+epsVer+' EPSF-3.0',
+        '%%BoundingBox: 0 0 '+Math.ceil(ptW)+' '+Math.ceil(ptH),
+        '%%HiResBoundingBox: 0 0 '+ptW+' '+ptH,
+        '%%Creator: PNG2EPS Vector Tracer',
+        '%%DocumentData: Clean7Bit',
+        '%%ColorUsage: Color',
+        '%%LanguageLevel: 2',
+        '%%EndComments',
+        '%%BeginProlog','%%EndProlog',
+        '%%Page: 1 1',
+        'gsave',
+        '0 0 0 setrgbcolor', // hitam solid; bisa diwarnai ulang di Illustrator
+        'newpath'
+      ].join('\\n');
+
+      const footer = ['fill','grestore','%%EOF'].join('\\n');
+
+      return { eps: header+'\\n'+pathBody+footer, pathCount };
+    }
+
+    self.onmessage = function(e){
+      const { id, mode, w, h, pixels, dpi, epsVer, threshold, simplifyTol } = e.data;
+      try {
+        if (mode === 'preview') {
+          const bin = toBinary(pixels, w, h, threshold);
+          const rawContours = traceContours(bin, w, h);
+          const simplifiedContours = rawContours
+            .map(c => simplify(c, simplifyTol))
+            .filter(c => c.length >= 3);
+          self.postMessage({ id, ok:true, contours: simplifiedContours, w, h, pathCount: simplifiedContours.length });
+        } else {
+          const { eps, pathCount } = buildVectorEps(w, h, pixels, dpi, epsVer, threshold, simplifyTol);
+          self.postMessage({ id, ok:true, eps, pathCount });
+        }
+      } catch(err){
+        self.postMessage({ id, ok:false, error: err.message });
+      }
+    };
+  `;
+  const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+  let worker = null;
+  let workerBusyCount = 0; // tracks in-flight worker requests so we never terminate while one is pending
+  function getWorker() {
+    if (!worker) {
+      worker = new Worker(URL.createObjectURL(workerBlob));
+      // Safety net: if the Worker throws outside try/catch (e.g. unexpected
+      // runtime error), this fires instead of leaving pending promises hung
+      // forever. We broadcast a synthetic failure to ALL pending handlers
+      // so the UI never gets stuck locked with isProcessing=true.
+      worker.onerror = (err) => {
+        console.error('Worker crashed:', err.message);
+        worker.dispatchEvent(new MessageEvent('message', {
+          data: { id: '__worker_crash__', ok: false, error: 'Worker error: ' + err.message }
+        }));
+      };
+    }
+    return worker;
+  }
+
+  // Wraps a worker request with a timeout so a hung/crashed worker can
+  // never freeze the UI permanently — after WORKER_TIMEOUT_MS we reject
+  // and let the caller's catch/finally restore button state.
+  // On ANY failure (timeout or worker error) we forcibly kill and discard
+  // the worker instance, so the next call always gets a fresh, healthy
+  // Worker instead of reusing a hung "zombie" that already failed once.
+  const WORKER_TIMEOUT_MS = 30000;
+  function withWorkerTimeout(promise, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error(`${label} timeout setelah 30s (file mungkin terlalu besar/kompleks)`)),
+        WORKER_TIMEOUT_MS
+      ))
+    ]).catch(err => {
+      if (worker) { worker.terminate(); worker = null; }
+      workerBusyCount = 0; // reset: the worker is gone, nothing is "in flight" on it anymore
+      throw err;
+    });
+  }
+
+  // Decode PNG -> raw pixel buffer on main thread (unavoidable, uses canvas),
+  // but keep this part fast/minimal, then hand heavy hex-building to the Worker.
+  function decodeImage(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const w = img.naturalWidth, h = img.naturalHeight;
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+        const data = ctx.getImageData(0, 0, w, h).data;
+        // release canvas memory immediately
+        canvas.width = 0; canvas.height = 0;
+        resolve({ w, h, pixels: data });
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url); // prevent leak on failed/corrupt file
+        reject(new Error('File PNG tidak valid atau rusak'));
+      };
+      img.src = url;
+    });
+  }
+
+  function convertOneInWorker(w, h, pixels, dpi, epsVer, threshold, simplifyTol) {
+    const wk = getWorker();
+    const id = Math.random().toString(36).slice(2);
+    workerBusyCount++;
+    const promise = new Promise((resolve, reject) => {
+      const handler = (e) => {
+        if (e.data.id !== id) return;
+        wk.removeEventListener('message', handler);
+        if (e.data.ok) resolve(e.data);
+        else reject(new Error(e.data.error));
+      };
+      wk.addEventListener('message', handler);
+      // Transfer the pixel buffer instead of copying it (faster, less memory)
+      wk.postMessage({ id, w, h, pixels, dpi, epsVer, threshold, simplifyTol }, [pixels.buffer]);
+    });
+    return withWorkerTimeout(promise, 'Konversi').finally(() => { workerBusyCount--; });
+  }
+
+  async function previewFirst() {
+    if (!files.length) return;
+    const previewBtn = document.getElementById('previewBtn');
+    const convertBtn = document.getElementById('convertBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const box = document.getElementById('previewBox');
+    const wrap = document.getElementById('previewSvgWrap');
+    const info = document.getElementById('previewInfo');
+    wrap.innerHTML = '<p style="color:#888;font-size:0.85rem;">Memproses preview...</p>';
+    box.style.display = '';
+    previewBtn.disabled = true;
+    convertBtn.disabled = true;
+    clearBtn.disabled = true;
+    isProcessing = true;
+
+    try {
+      const threshold = parseInt(document.getElementById('threshold').value);
+      const simplifyTol = parseFloat(document.getElementById('simplifyTol').value);
+
+      const { w, h, pixels } = await decodeImage(files[0]);
+      const wk = getWorker();
+      const id = 'preview-' + Math.random().toString(36).slice(2);
+      workerBusyCount++;
+
+      const previewPromise = new Promise((resolve, reject) => {
+        const handler = (e) => {
+          if (e.data.id !== id) return;
+          wk.removeEventListener('message', handler);
+          e.data.ok ? resolve(e.data) : reject(new Error(e.data.error));
+        };
+        wk.addEventListener('message', handler);
+        wk.postMessage({ id, mode: 'preview', w, h, pixels, threshold, simplifyTol }, [pixels.buffer]);
+      });
+      const result = await withWorkerTimeout(previewPromise, 'Preview').finally(() => { workerBusyCount--; });
+
+      if (!result.contours.length) {
+        wrap.innerHTML = '<p style="color:#f87171;font-size:0.85rem;">⚠ Tidak ada bentuk terdeteksi. Coba turunkan Threshold.</p>';
+        info.textContent = '';
+        return;
+      }
+
+      let pathD = '';
+      for (const c of result.contours) {
+        pathD += 'M ' + c.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' L ') + ' Z ';
+      }
+
+      const totalPoints = result.contours.reduce((sum, c) => sum + c.length, 0);
+
+      wrap.innerHTML = `
+        <svg viewBox="0 0 ${w} ${h}" width="280" height="${Math.round(280*h/w)}" style="max-width:100%;">
+          <path d="${pathD}" fill="#1e1e28" fill-rule="evenodd" stroke="#7c5cfc" stroke-width="0.6"/>
+        </svg>`;
+      info.textContent = `${result.pathCount} path terdeteksi · ${totalPoints} titik anchor · garis ungu = batas vector`;
+    } catch (e) {
+      wrap.innerHTML = `<p style="color:#f87171;font-size:0.85rem;">⚠ Preview gagal: ${e.message}</p>`;
+      info.textContent = '';
+    } finally {
+      previewBtn.disabled = false;
+      convertBtn.disabled = false;
+      clearBtn.disabled = false;
+      isProcessing = false;
+    }
+  }
+
+  async function startConvert() {
+    if (!files.length) return;
+
+    const btn = document.getElementById('convertBtn');
+    const previewBtn = document.getElementById('previewBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    btn.disabled = true;
+    previewBtn.disabled = true;
+    clearBtn.disabled = true;
+    isProcessing = true;
+    show('progressSection');
+    hide('downloadSection');
+    lastWarnings = [];
+
+    try {
+      const zip = new JSZip();
+      const dpi = parseInt(document.getElementById('dpiMode').value);
+      const epsVer = document.getElementById('epsVersion').value;
+      const threshold = parseInt(document.getElementById('threshold').value);
+      const simplifyTol = parseFloat(document.getElementById('simplifyTol').value);
+
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const card = document.getElementById(`card-${i}`);
+        card.classList.add('converting');
+        updateProgress(i, files.length, f.name);
+
+        try {
+          const { w, h, pixels } = await decodeImage(f);
+          const result = await convertOneInWorker(w, h, pixels, dpi, epsVer, threshold, simplifyTol);
+          const epsName = f.name.replace(/\.png$/i, '.eps');
+          zip.file(epsName, result.eps);
+          card.classList.remove('converting');
+          card.classList.add('done');
+          if (result.pathCount === 0) {
+            card.classList.add('error');
+            card.classList.remove('done');
+            lastWarnings.push(`${f.name}: tidak ada bentuk terdeteksi (cek threshold)`);
+          } else if (result.pathCount > 400) {
+            lastWarnings.push(`${f.name}: ${result.pathCount} path terdeteksi — mungkin terlalu detail/noisy, coba naikkan "Simplifikasi"`);
+          }
+        } catch(e) {
+          card.classList.remove('converting');
+          card.classList.add('error');
+          lastWarnings.push(`${f.name}: gagal diproses (${e.message})`);
+        }
+        // No setTimeout/sleep needed: awaiting the Worker message already
+        // yields to the event loop, and Workers are NOT throttled when the
+        // tab is in the background — so switching tabs won't stall progress.
+      }
+
+      updateProgress(files.length, files.length, 'Membuat ZIP...');
+      zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+
+      // Revoke the previous ZIP's blob URL (if user converted before) to
+      // avoid leaking memory across repeated conversions in one session.
+      if (zipDownloadUrl) URL.revokeObjectURL(zipDownloadUrl);
+      zipDownloadUrl = URL.createObjectURL(zipBlob);
+
+      hide('progressSection');
+      show('downloadSection');
+
+      document.getElementById('resultDesc').textContent =
+        `${files.length} file EPS siap — ${(zipBlob.size / 1024).toFixed(1)} KB`;
+
+      renderWarnings();
+
+      document.getElementById('downloadBtn').onclick = () => {
+        const a = document.createElement('a');
+        a.href = zipDownloadUrl;
+        a.download = `eps_export_${Date.now()}.zip`;
+        a.click();
+      };
+    } catch (e) {
+      hide('progressSection');
+      lastWarnings.push(`Proses dihentikan: ${e.message}`);
+      renderWarnings();
+    } finally {
+      btn.disabled = false;
+      previewBtn.disabled = false;
+      clearBtn.disabled = false;
+      isProcessing = false;
+      // Only terminate if nothing else is still waiting on this worker
+      // (prevents silently orphaning a pending previewFirst() promise).
+      if (worker && workerBusyCount === 0) { worker.terminate(); worker = null; }
+    }
+  }
+
+  function renderWarnings() {
+    const box = document.getElementById('warningBox');
+    if (!lastWarnings.length) { box.style.display = 'none'; return; }
+    box.style.display = '';
+    box.innerHTML = '<strong>⚠ Perlu dicek sebelum upload:</strong><ul>' +
+      lastWarnings.map(w => `<li>${w}</li>`).join('') + '</ul>';
+  }
+
+  // ─── HELPERS ─────────────────────────────────────────────
+  function show(id) { document.getElementById(id).style.display = ''; }
+  function hide(id) { document.getElementById(id).style.display = 'none'; }
+
+  function updateProgress(done, total, label) {
+    const pct = total ? Math.round(done / total * 100) : 0;
+    document.getElementById('progressFill').style.width = pct + '%';
+    document.getElementById('progressLabel').textContent =
+      `${label} — ${done}/${total} file (${pct}%)`;
+  }
+
+  // hide sections on load
+  ['fileSection','settingsSection','convertSection','progressSection','downloadSection']
+    .forEach(id => hide(id));
+</script>
+</body>
+</html>
