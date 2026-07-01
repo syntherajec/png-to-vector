@@ -377,17 +377,6 @@
     </div>
   </div>
 
-  <!-- PREVIEW BUTTON -->
-  <div id="previewSection" style="display:none; margin-top:16px;">
-    <button type="button" class="btn-clear" id="previewBtn" style="width:100%; padding:12px; font-size:0.88rem;" onclick="previewFirst()">
-      👁 Preview Hasil Trace (file pertama) — cek sebelum proses semua
-    </button>
-    <div id="previewBox" style="display:none; margin-top:16px; background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; text-align:center;">
-      <div id="previewSvgWrap" style="background:#fff; border-radius:8px; padding:16px; display:inline-block; max-width:100%;"></div>
-      <p id="previewInfo" style="margin-top:10px; font-size:0.8rem; color:var(--muted);"></p>
-    </div>
-  </div>
-
   <!-- WARNING BOX -->
   <div id="warningBox" style="display:none; margin-top:16px; background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.4); border-radius:12px; padding:16px 20px; font-size:0.85rem; color:#fde68a;"></div>
 
@@ -429,7 +418,7 @@
   let files = [];
   let zipBlob = null;
   let zipDownloadUrl = null; // tracks the active blob URL for the zip so we can revoke it before creating a new one
-  let isProcessing = false; // true while previewFirst() or startConvert() is running —
+  let isProcessing = false; // true while startConvert() is running —
                              // blocks adding/clearing files mid-flight to prevent
                              // index/array mismatches and null-element crashes.
 
@@ -460,8 +449,6 @@
     show('fileSection');
     show('settingsSection');
     show('convertSection');
-    show('previewSection');
-    hide('previewBox');
     hide('downloadSection');
     hide('progressSection');
     hide('warningBox');
@@ -481,8 +468,6 @@
     hide('convertSection');
     hide('progressSection');
     hide('downloadSection');
-    hide('previewSection');
-    hide('previewBox');
     hide('warningBox');
   }
 
@@ -610,12 +595,25 @@
       return path;
     }
 
+    // Batas maksimum path yang diterima sebagai "vector bersih".
+    // Jika hasil tracing melebihi ini, gambar terlalu kompleks/noise untuk
+    // di-trace otomatis (biasanya karena gradient/anti-aliasing halus).
+    // Lebih baik berhenti dini dengan pesan jelas daripada menghasilkan
+    // file EPS dengan jutaan path yang tidak berguna bagi Adobe Stock.
+    const MAX_PATHS = 2000;
+
     function buildVectorEps(w, h, pixels, dpi, epsVer, threshold, simplifyTol){
       const scale = 72/dpi;
       const ptW = (w*scale).toFixed(4), ptH = (h*scale).toFixed(4);
 
       const bin = toBinary(pixels, w, h, threshold);
       const rawContours = traceContours(bin, w, h);
+
+      // Deteksi dini: terlalu banyak kontur mentah berarti gambar ini
+      // mengandung noise/gradient yang tidak cocok untuk tracing otomatis.
+      if (rawContours.length > MAX_PATHS * 3) {
+        throw new Error('Gambar terlalu kompleks (' + rawContours.length + ' kontur terdeteksi). PNG ini kemungkinan mengandung gradient/shadow/anti-aliasing — tidak cocok untuk vector tracing otomatis. Gunakan PNG flat/solid color.');
+      }
 
       let pathBody = '';
       let pathCount = 0;
@@ -624,6 +622,10 @@
         if(simplified.length<3) continue;
         pathBody += contourToPath(simplified, scale, h);
         pathCount++;
+        // Hentikan jika sudah terlalu banyak path (lebih baik dari hang)
+        if (pathCount > MAX_PATHS) {
+          throw new Error('Gambar menghasilkan terlalu banyak path (' + pathCount + '+). PNG mengandung terlalu banyak detail halus untuk vector tracing. Gunakan PNG dengan warna solid dan tepi tegas.');
+        }
       }
 
       const header = [
@@ -638,7 +640,7 @@
         '%%BeginProlog','%%EndProlog',
         '%%Page: 1 1',
         'gsave',
-        '0 0 0 setrgbcolor', // hitam solid; bisa diwarnai ulang di Illustrator
+        '0 0 0 setrgbcolor',
         'newpath'
       ].join('\\n');
 
@@ -648,19 +650,10 @@
     }
 
     self.onmessage = function(e){
-      const { id, mode, w, h, pixels, dpi, epsVer, threshold, simplifyTol } = e.data;
+      const { id, w, h, pixels, dpi, epsVer, threshold, simplifyTol } = e.data;
       try {
-        if (mode === 'preview') {
-          const bin = toBinary(pixels, w, h, threshold);
-          const rawContours = traceContours(bin, w, h);
-          const simplifiedContours = rawContours
-            .map(c => simplify(c, simplifyTol))
-            .filter(c => c.length >= 3);
-          self.postMessage({ id, ok:true, contours: simplifiedContours, w, h, pathCount: simplifiedContours.length });
-        } else {
-          const { eps, pathCount } = buildVectorEps(w, h, pixels, dpi, epsVer, threshold, simplifyTol);
-          self.postMessage({ id, ok:true, eps, pathCount });
-        }
+        const { eps, pathCount } = buildVectorEps(w, h, pixels, dpi, epsVer, threshold, simplifyTol);
+        self.postMessage({ id, ok:true, eps, pathCount });
       } catch(err){
         self.postMessage({ id, ok:false, error: err.message });
       }
@@ -709,21 +702,36 @@
 
   // Decode PNG -> raw pixel buffer on main thread (unavoidable, uses canvas),
   // but keep this part fast/minimal, then hand heavy hex-building to the Worker.
+  // Tracing dilakukan pixel-per-pixel; gambar yang sangat besar (umum dari
+  // ekspor Canva 4000-5000px) membuat proses lambat/timeout dan rentan
+  // menangkap noise/anti-aliasing sebagai ribuan bentuk mikroskopis.
+  // Kita batasi sisi terpanjang ke MAX_TRACE_DIMENSION — untuk icon/logo
+  // ini tidak mengurangi kualitas hasil vector (detail bentuk tetap utuh),
+  // tapi membuat proses jauh lebih cepat dan stabil.
+  const MAX_TRACE_DIMENSION = 1500;
+
   function decodeImage(file) {
     return new Promise((resolve, reject) => {
       const img = new Image();
       const url = URL.createObjectURL(file);
       img.onload = () => {
-        const w = img.naturalWidth, h = img.naturalHeight;
+        const origW = img.naturalWidth, origH = img.naturalHeight;
+        let w = origW, h = origH;
+        const longest = Math.max(w, h);
+        if (longest > MAX_TRACE_DIMENSION) {
+          const scale = MAX_TRACE_DIMENSION / longest;
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
         const canvas = document.createElement('canvas');
         canvas.width = w; canvas.height = h;
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        ctx.drawImage(img, 0, 0);
+        ctx.drawImage(img, 0, 0, w, h); // drawImage auto-scales if w/h differ from natural size
         URL.revokeObjectURL(url);
         const data = ctx.getImageData(0, 0, w, h).data;
         // release canvas memory immediately
         canvas.width = 0; canvas.height = 0;
-        resolve({ w, h, pixels: data });
+        resolve({ w, h, pixels: data, wasResized: longest > MAX_TRACE_DIMENSION, origW, origH });
       };
       img.onerror = () => {
         URL.revokeObjectURL(url); // prevent leak on failed/corrupt file
@@ -751,78 +759,12 @@
     return withWorkerTimeout(promise, 'Konversi').finally(() => { workerBusyCount--; });
   }
 
-  async function previewFirst() {
-    if (!files.length) return;
-    const previewBtn = document.getElementById('previewBtn');
-    const convertBtn = document.getElementById('convertBtn');
-    const clearBtn = document.getElementById('clearBtn');
-    const box = document.getElementById('previewBox');
-    const wrap = document.getElementById('previewSvgWrap');
-    const info = document.getElementById('previewInfo');
-    wrap.innerHTML = '<p style="color:#888;font-size:0.85rem;">Memproses preview...</p>';
-    box.style.display = '';
-    previewBtn.disabled = true;
-    convertBtn.disabled = true;
-    clearBtn.disabled = true;
-    isProcessing = true;
-
-    try {
-      const threshold = parseInt(document.getElementById('threshold').value);
-      const simplifyTol = parseFloat(document.getElementById('simplifyTol').value);
-
-      const { w, h, pixels } = await decodeImage(files[0]);
-      const wk = getWorker();
-      const id = 'preview-' + Math.random().toString(36).slice(2);
-      workerBusyCount++;
-
-      const previewPromise = new Promise((resolve, reject) => {
-        const handler = (e) => {
-          if (e.data.id !== id) return;
-          wk.removeEventListener('message', handler);
-          e.data.ok ? resolve(e.data) : reject(new Error(e.data.error));
-        };
-        wk.addEventListener('message', handler);
-        wk.postMessage({ id, mode: 'preview', w, h, pixels, threshold, simplifyTol }, [pixels.buffer]);
-      });
-      const result = await withWorkerTimeout(previewPromise, 'Preview').finally(() => { workerBusyCount--; });
-
-      if (!result.contours.length) {
-        wrap.innerHTML = '<p style="color:#f87171;font-size:0.85rem;">⚠ Tidak ada bentuk terdeteksi. Coba turunkan Threshold.</p>';
-        info.textContent = '';
-        return;
-      }
-
-      let pathD = '';
-      for (const c of result.contours) {
-        pathD += 'M ' + c.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' L ') + ' Z ';
-      }
-
-      const totalPoints = result.contours.reduce((sum, c) => sum + c.length, 0);
-
-      wrap.innerHTML = `
-        <svg viewBox="0 0 ${w} ${h}" width="280" height="${Math.round(280*h/w)}" style="max-width:100%;">
-          <path d="${pathD}" fill="#1e1e28" fill-rule="evenodd" stroke="#7c5cfc" stroke-width="0.6"/>
-        </svg>`;
-      info.textContent = `${result.pathCount} path terdeteksi · ${totalPoints} titik anchor · garis ungu = batas vector`;
-    } catch (e) {
-      wrap.innerHTML = `<p style="color:#f87171;font-size:0.85rem;">⚠ Preview gagal: ${e.message}</p>`;
-      info.textContent = '';
-    } finally {
-      previewBtn.disabled = false;
-      convertBtn.disabled = false;
-      clearBtn.disabled = false;
-      isProcessing = false;
-    }
-  }
-
   async function startConvert() {
     if (!files.length) return;
 
     const btn = document.getElementById('convertBtn');
-    const previewBtn = document.getElementById('previewBtn');
     const clearBtn = document.getElementById('clearBtn');
     btn.disabled = true;
-    previewBtn.disabled = true;
     clearBtn.disabled = true;
     isProcessing = true;
     show('progressSection');
@@ -843,7 +785,10 @@
         updateProgress(i, files.length, f.name);
 
         try {
-          const { w, h, pixels } = await decodeImage(f);
+          const { w, h, pixels, wasResized, origW, origH } = await decodeImage(f);
+          if (wasResized) {
+            lastWarnings.push(`${f.name}: diperkecil otomatis dari ${origW}×${origH} → ${w}×${h}px sebelum di-trace (file asli tetap tidak berubah)`);
+          }
           const result = await convertOneInWorker(w, h, pixels, dpi, epsVer, threshold, simplifyTol);
           const epsName = f.name.replace(/\.png$/i, '.eps');
           zip.file(epsName, result.eps);
@@ -852,9 +797,7 @@
           if (result.pathCount === 0) {
             card.classList.add('error');
             card.classList.remove('done');
-            lastWarnings.push(`${f.name}: tidak ada bentuk terdeteksi (cek threshold)`);
-          } else if (result.pathCount > 400) {
-            lastWarnings.push(`${f.name}: ${result.pathCount} path terdeteksi — mungkin terlalu detail/noisy, coba naikkan "Simplifikasi"`);
+            lastWarnings.push(`${f.name}: tidak ada bentuk terdeteksi — coba turunkan Threshold`);
           }
         } catch(e) {
           card.classList.remove('converting');
@@ -894,11 +837,9 @@
       renderWarnings();
     } finally {
       btn.disabled = false;
-      previewBtn.disabled = false;
       clearBtn.disabled = false;
       isProcessing = false;
-      // Only terminate if nothing else is still waiting on this worker
-      // (prevents silently orphaning a pending previewFirst() promise).
+      // Only terminate if nothing else is still waiting on this worker.
       if (worker && workerBusyCount === 0) { worker.terminate(); worker = null; }
     }
   }
