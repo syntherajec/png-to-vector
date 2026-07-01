@@ -316,7 +316,7 @@
 <main>
   <!-- DROP ZONE -->
   <div class="dropzone" id="dropzone">
-    <input type="file" id="fileInput" accept="image/png" multiple />
+    <input type="file" id="fileInput" accept="image/png,.png" multiple />
     <span class="drop-icon">🖼️</span>
     <h2>Drop PNG files di sini</h2>
     <p>atau klik untuk pilih file — support upload massal</p>
@@ -371,7 +371,7 @@
       </div>
       <p style="margin-top:14px; font-size:0.8rem; color:var(--muted); line-height:1.5;">
         💡 Untuk icon/objek tanpa background: pakai setting <strong>Normal</strong> di semua pilihan dulu,
-        lalu cek hasil di Preview sebelum upload massal. Naikkan Threshold kalau ada bagian terang yang
+        lalu cek hasil di file EPS setelah konversi. Naikkan Threshold kalau ada bagian terang yang
         ikut ter-trace tidak diinginkan; naikkan Simplifikasi kalau hasil path terlalu "berduri"/noisy.
       </p>
     </div>
@@ -421,23 +421,47 @@
   let isProcessing = false; // true while startConvert() is running —
                              // blocks adding/clearing files mid-flight to prevent
                              // index/array mismatches and null-element crashes.
+  let lastWarnings = [];
 
   // ─── DRAG & DROP ─────────────────────────────────────────
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('fileInput');
+
+  // Terima file sebagai PNG jika MIME type cocok ATAU ekstensi .png cocok.
+  // Sebagian browser/OS/aplikasi (terutama saat drag-and-drop) tidak selalu
+  // mengisi file.type dengan benar — kalau kita cuma cek type, file PNG
+  // yang valid bisa ter-skip diam-diam tanpa pesan error apa pun.
+  function isPngFile(f) {
+    if (f.type === 'image/png') return true;
+    if (!f.type && /\.png$/i.test(f.name)) return true;
+    return /\.png$/i.test(f.name);
+  }
 
   dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
   dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
   dropzone.addEventListener('drop', e => {
     e.preventDefault();
     dropzone.classList.remove('drag-over');
-    if (isProcessing) return; // ignore new files while converting/previewing
-    const dropped = Array.from(e.dataTransfer.files).filter(f => f.type === 'image/png');
-    addFiles(dropped);
+    if (isProcessing) return; // ignore new files while converting
+    const dropped = Array.from(e.dataTransfer.files);
+    const pngs = dropped.filter(isPngFile);
+    const rejected = dropped.length - pngs.length;
+    addFiles(pngs);
+    if (rejected > 0) {
+      lastWarnings.push(`${rejected} file dilewati karena bukan PNG.`);
+      renderWarnings();
+    }
   });
   fileInput.addEventListener('change', () => {
     if (isProcessing) { fileInput.value = ''; return; }
-    addFiles(Array.from(fileInput.files));
+    const picked = Array.from(fileInput.files);
+    const pngs = picked.filter(isPngFile);
+    const rejected = picked.length - pngs.length;
+    addFiles(pngs);
+    if (rejected > 0) {
+      lastWarnings.push(`${rejected} file dilewati karena bukan PNG.`);
+      renderWarnings();
+    }
     fileInput.value = '';
   });
 
@@ -452,15 +476,17 @@
     hide('downloadSection');
     hide('progressSection');
     hide('warningBox');
+    lastWarnings = [];
     zipBlob = null;
     if (zipDownloadUrl) { URL.revokeObjectURL(zipDownloadUrl); zipDownloadUrl = null; }
     document.getElementById('fileCount').textContent = files.length;
   }
 
   function clearFiles() {
-    if (isProcessing) return; // never clear array mid-conversion/preview
+    if (isProcessing) return; // never clear array mid-conversion
     files = [];
     zipBlob = null;
+    lastWarnings = [];
     if (zipDownloadUrl) { URL.revokeObjectURL(zipDownloadUrl); zipDownloadUrl = null; }
     document.getElementById('fileGrid').innerHTML = '';
     hide('fileSection');
@@ -685,12 +711,12 @@
   // On ANY failure (timeout or worker error) we forcibly kill and discard
   // the worker instance, so the next call always gets a fresh, healthy
   // Worker instead of reusing a hung "zombie" that already failed once.
-  const WORKER_TIMEOUT_MS = 30000;
+  const WORKER_TIMEOUT_MS = 45000;
   function withWorkerTimeout(promise, label) {
     return Promise.race([
       promise,
       new Promise((_, reject) => setTimeout(
-        () => reject(new Error(`${label} timeout setelah 30s (file mungkin terlalu besar/kompleks)`)),
+        () => reject(new Error(`${label} timeout setelah 45s (file mungkin terlalu besar/kompleks)`)),
         WORKER_TIMEOUT_MS
       ))
     ]).catch(err => {
@@ -716,22 +742,32 @@
       const url = URL.createObjectURL(file);
       img.onload = () => {
         const origW = img.naturalWidth, origH = img.naturalHeight;
+        if (!origW || !origH) {
+          URL.revokeObjectURL(url);
+          reject(new Error('File PNG tidak valid atau rusak (dimensi 0)'));
+          return;
+        }
         let w = origW, h = origH;
         const longest = Math.max(w, h);
         if (longest > MAX_TRACE_DIMENSION) {
           const scale = MAX_TRACE_DIMENSION / longest;
-          w = Math.round(w * scale);
-          h = Math.round(h * scale);
+          w = Math.max(1, Math.round(w * scale));
+          h = Math.max(1, Math.round(h * scale));
         }
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        ctx.drawImage(img, 0, 0, w, h); // drawImage auto-scales if w/h differ from natural size
-        URL.revokeObjectURL(url);
-        const data = ctx.getImageData(0, 0, w, h).data;
-        // release canvas memory immediately
-        canvas.width = 0; canvas.height = 0;
-        resolve({ w, h, pixels: data, wasResized: longest > MAX_TRACE_DIMENSION, origW, origH });
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(img, 0, 0, w, h); // drawImage auto-scales if w/h differ from natural size
+          URL.revokeObjectURL(url);
+          const data = ctx.getImageData(0, 0, w, h).data;
+          // release canvas memory immediately
+          canvas.width = 0; canvas.height = 0;
+          resolve({ w, h, pixels: data, wasResized: longest > MAX_TRACE_DIMENSION, origW, origH });
+        } catch (canvasErr) {
+          URL.revokeObjectURL(url);
+          reject(new Error('Gagal membaca pixel PNG: ' + canvasErr.message));
+        }
       };
       img.onerror = () => {
         URL.revokeObjectURL(url); // prevent leak on failed/corrupt file
@@ -777,6 +813,7 @@
       const epsVer = document.getElementById('epsVersion').value;
       const threshold = parseInt(document.getElementById('threshold').value);
       const simplifyTol = parseFloat(document.getElementById('simplifyTol').value);
+      let successCount = 0;
 
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
@@ -793,11 +830,13 @@
           const epsName = f.name.replace(/\.png$/i, '.eps');
           zip.file(epsName, result.eps);
           card.classList.remove('converting');
-          card.classList.add('done');
+
           if (result.pathCount === 0) {
             card.classList.add('error');
-            card.classList.remove('done');
             lastWarnings.push(`${f.name}: tidak ada bentuk terdeteksi — coba turunkan Threshold`);
+          } else {
+            card.classList.add('done');
+            successCount++;
           }
         } catch(e) {
           card.classList.remove('converting');
@@ -809,6 +848,14 @@
         // tab is in the background — so switching tabs won't stall progress.
       }
 
+      hide('progressSection');
+
+      if (successCount === 0) {
+        lastWarnings.push('Tidak ada file yang berhasil dikonversi — cek pesan error di atas untuk tiap file.');
+        renderWarnings();
+        return;
+      }
+
       updateProgress(files.length, files.length, 'Membuat ZIP...');
       zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
 
@@ -817,11 +864,12 @@
       if (zipDownloadUrl) URL.revokeObjectURL(zipDownloadUrl);
       zipDownloadUrl = URL.createObjectURL(zipBlob);
 
-      hide('progressSection');
       show('downloadSection');
 
-      document.getElementById('resultDesc').textContent =
-        `${files.length} file EPS siap — ${(zipBlob.size / 1024).toFixed(1)} KB`;
+      const failedCount = files.length - successCount;
+      document.getElementById('resultDesc').textContent = failedCount > 0
+        ? `${successCount}/${files.length} file EPS berhasil (${failedCount} gagal, lihat catatan) — ${(zipBlob.size / 1024).toFixed(1)} KB`
+        : `${successCount} file EPS siap — ${(zipBlob.size / 1024).toFixed(1)} KB`;
 
       renderWarnings();
 
@@ -848,7 +896,7 @@
     const box = document.getElementById('warningBox');
     if (!lastWarnings.length) { box.style.display = 'none'; return; }
     box.style.display = '';
-    box.innerHTML = '<strong>⚠ Perlu dicek sebelum upload:</strong><ul>' +
+    box.innerHTML = '<strong>⚠ Perlu dicek:</strong><ul>' +
       lastWarnings.map(w => `<li>${w}</li>`).join('') + '</ul>';
   }
 
