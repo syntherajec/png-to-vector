@@ -1850,6 +1850,90 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     high: { numberofcolors: 32, ltres: 0.5, qtres: 0.5, pathomit: 4 }
   };
 
+  /* ---------------------------------------------------------------
+     Worker pool: runs the heavy trace + EPS build off the main
+     thread so the tab never freezes, and keeps running even when
+     the tab is in the background (workers aren't throttled the way
+     setTimeout on a hidden tab is). Falls back to the old in-page
+     behavior automatically if Worker/Blob aren't available.
+  --------------------------------------------------------------- */
+
+  var workerPool = null; // created lazily, reused across "Proses" clicks
+
+  function getWorkerPool() {
+    if (workerPool) return workerPool;
+    if (typeof Worker === 'undefined' || typeof Blob === 'undefined') return null;
+    try {
+      var scripts = document.getElementsByTagName('script');
+      var imagetracerSrc = null;
+      for (var i = 0; i < scripts.length; i++) {
+        if (scripts[i].textContent.indexOf('function ImageTracer()') !== -1) {
+          imagetracerSrc = scripts[i].textContent;
+          break;
+        }
+      }
+      if (!imagetracerSrc) return null;
+
+      // Reuse the exact same functions that run on the main thread (via
+      // toString()) so the worker can never drift out of sync with them.
+      var helperSrc = [quadToCubic, n, buildPathOps, tracedataToEPS]
+        .map(function (f) { return f.toString(); })
+        .join('\n');
+
+      var onmessageSrc =
+        'self.onmessage = function (e) {' +
+        '  var d = e.data;' +
+        '  try {' +
+        '    var imgd = { width: d.width, height: d.height, data: new Uint8ClampedArray(d.buffer) };' +
+        '    var tracedata = ImageTracer.imagedataToTracedata(imgd, d.options);' +
+        '    var result = tracedataToEPS(tracedata, { scale: 1, title: d.title });' +
+        '    self.postMessage({ ok: true, eps: result.eps, pathCount: result.pathCount });' +
+        '  } catch (err) {' +
+        '    self.postMessage({ ok: false, error: (err && err.message) ? err.message : String(err) });' +
+        '  }' +
+        '};';
+
+      var src = imagetracerSrc + '\n' + helperSrc + '\n' + onmessageSrc;
+      var blob = new Blob([src], { type: 'application/javascript' });
+      var url = URL.createObjectURL(blob);
+      var count = Math.max(1, Math.min(4, navigator.hardwareConcurrency || 2));
+      var workers = [];
+      for (var w = 0; w < count; w++) workers.push(new Worker(url));
+
+      workerPool = { workers: workers, url: url };
+      return workerPool;
+    } catch (e) {
+      console.error('Worker pool tidak tersedia, memakai mode biasa:', e);
+      return null;
+    }
+  }
+
+  function traceInWorker(worker, loaded, options, title) {
+    return new Promise(function (resolve, reject) {
+      function onMessage(e) {
+        cleanup();
+        var d = e.data;
+        if (d.ok) resolve({ eps: d.eps, pathCount: d.pathCount });
+        else reject(new Error(d.error || 'Gagal memproses di worker'));
+      }
+      function onError(err) {
+        cleanup();
+        reject(new Error(err && err.message ? err.message : 'Worker error'));
+      }
+      function cleanup() {
+        worker.removeEventListener('message', onMessage);
+        worker.removeEventListener('error', onError);
+      }
+      worker.addEventListener('message', onMessage);
+      worker.addEventListener('error', onError);
+      var buffer = loaded.imgd.data.buffer;
+      worker.postMessage(
+        { width: loaded.width, height: loaded.height, buffer: buffer, options: options, title: title },
+        [buffer]
+      );
+    });
+  }
+
   async function processAll() {
     if (state.processing || state.files.length === 0) return;
     state.processing = true;
@@ -1860,30 +1944,57 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
     var preset = DETAIL_PRESETS[els.detailSelect.value] || DETAIL_PRESETS.medium;
     var total = state.files.length;
-    var okCount = 0, errCount = 0;
+    var okCount = 0, errCount = 0, completed = 0;
+    var cursor = 0;
 
-    for (var i = 0; i < total; i++) {
-      var item = state.files[i];
-      setRowStatus(i, 'processing');
-      els.progressText.textContent = 'Memproses ' + (i + 1) + ' dari ' + total + ': ' + item.name;
-      await yieldToUI();
+    function nextTaskIndex() {
+      return cursor < total ? cursor++ : -1;
+    }
 
-      try {
-        var loaded = await loadImageData(item.file);
-        var options = Object.assign({}, ImageTracer.optionpresets['default'], preset, { scale: 1 });
-        var tracedata = ImageTracer.imagedataToTracedata(loaded.imgd, options);
-        var result = tracedataToEPS(tracedata, { scale: 1, title: item.name.replace(/\.png$/i, '') });
-        item.epsBlob = new Blob([result.eps], { type: 'application/postscript' });
-        setRowStatus(i, 'done');
-        okCount++;
-      } catch (e) {
-        console.error(e);
-        setRowStatus(i, 'error', e.message);
-        errCount++;
+    function updateProgress() {
+      els.progressBar.style.width = Math.round((completed / total) * 100) + '%';
+      els.progressText.textContent = 'Memproses\u2026 ' + completed + ' dari ' + total + ' selesai';
+    }
+
+    async function laneRun(worker) {
+      var idx;
+      while ((idx = nextTaskIndex()) !== -1) {
+        var item = state.files[idx];
+        setRowStatus(idx, 'processing');
+
+        try {
+          var loaded = await loadImageData(item.file);
+          var options = Object.assign({}, ImageTracer.optionpresets['default'], preset, { scale: 1 });
+          var title = item.name.replace(/\.png$/i, '');
+          var result;
+          if (worker) {
+            result = await traceInWorker(worker, loaded, options, title);
+          } else {
+            // Fallback path (no Worker support): same as before, still
+            // yields to the UI between files.
+            var tracedata = ImageTracer.imagedataToTracedata(loaded.imgd, options);
+            result = tracedataToEPS(tracedata, { scale: 1, title: title });
+          }
+          item.epsBlob = new Blob([result.eps], { type: 'application/postscript' });
+          setRowStatus(idx, 'done');
+          okCount++;
+        } catch (e) {
+          console.error(e);
+          setRowStatus(idx, 'error', e.message);
+          errCount++;
+        }
+
+        completed++;
+        updateProgress();
+        await yieldToUI();
       }
+    }
 
-      els.progressBar.style.width = Math.round(((i + 1) / total) * 100) + '%';
-      await yieldToUI();
+    var pool = getWorkerPool();
+    if (pool && pool.workers.length > 0) {
+      await Promise.all(pool.workers.map(function (w) { return laneRun(w); }));
+    } else {
+      await laneRun(null);
     }
 
     els.progressText.textContent = 'Selesai memproses ' + total + ' file.';
